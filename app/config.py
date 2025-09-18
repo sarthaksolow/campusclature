@@ -10,5 +10,5 @@ TEXT_SPLITTER = RecursiveCharacterTextSplitter(
     chunk_overlap=50
 )
 
-# Directory where ChromaDB stores vectors
-CHROMA_DIR = "chroma_db"
+# Directory where FAISS stores vectors
+FAISS_DIR = "faiss_index"

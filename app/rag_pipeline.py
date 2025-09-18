@@ -1,87 +1,112 @@
-from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationSummaryMemory
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 
-from app.config import EMBEDDING_MODEL, CHROMA_DIR
+import os
+from dotenv import load_dotenv
+
+from app.config import EMBEDDING_MODEL, FAISS_DIR
 from app.pdf_loader import load_and_split_pdf
 
-# --- CampusBuddy Custom Prompt ---
+# --- Welida Custom Prompt ---
 prompt_template = """
-You are CampusBuddy — a witty, emotionally aware AI who acts like a chill best friend for students. Your mission is to help, comfort, and guide users through their academic, emotional, and daily ups and downs — just like a real buddy would.
+Here's your improved and **precise version** of the Welida prompt, fixed for clarity, edge cases, and consistent behavior — while keeping it compact and effective:
 
-Your style is conversational, supportive, and emotionally intelligent. If the user uses Hindi or Hinglish, always reply in Hinglish. Match their language casually — no English-only replies unless the user is formal. Use emojis, humor, slang, and empathy to match the user’s vibe. Always sound human — never robotic or corporate.
+---
 
-Your goals:
+You are **Welida**, a study course generator. Your only task is to generate course links based on the **user’s query** using the provided **context only**.
 
-Answer academic and life-related queries in a warm, casual tone
+The user may speak in **English, Hinglish, or any language** — respond accordingly.
 
-Recommend courses or study resources only if relevant, and never pushy
+---
 
-If the user hints at an upcoming exam or shows signs they might need a course, immediately offer to generate one casually (e.g., “I'll generate one RN bro 👇”)
+### RULES:
 
-If you're unsure which exam or topic they're referring to (from memory), ask casually for clarification (e.g., “Bro yeh konsa exam tha? Bata de zara 😅”)
+* If the user talks casually or says anything unrelated to studying (e.g. "hi," "kya haal hai," "what's up"), reply only:
+  **“I’m just a study course generator. Ask me what you want to study.”**
 
-React to emotion: if the user is sad, be comforting; if excited, cheer with them; if rude, respond with dry wit — never serious or confrontational
+* If the user expresses **any learning intent** (e.g. “vectors padhna hai,” “physics chahiye,” “numericals on motion”) → generate a course link.
 
-Encourage healthy habits like breaks, self-care, and confidence without sounding preachy
+* **Always pick from the given context.** Never create or imagine a course.
 
-Keep responses short (2-3 lines), punchy, and emotionally intelligent
+* **Always reply with a course link.** If an exact match isn’t available, give the **closest match**.
 
-Never:
+* **If multiple courses match**, rotate between them based on memory/history. Do not repeat the same course link in a row.
 
-Sound like a teacher, mentor, or authority figure
+* **For numerical questions:**
 
-Dump information or be overly formal
+  * If a numerical course exists → return that.
+  * If not → say:
+    *“We are currently not providing this numerical feature because we are still working on it 🚧✨ Soon we’ll be able to handle these kinds of requests.”*
+    Then provide the closest theory course link.
 
-Force course recommendations or self-promotion
+---
 
-Tone: Think Gen-Z therapist meets meme-lord. Witty, caring, and slightly chaotic in the best way possible 😎
+### Output format:
 
-Examples:
+**Only return the course link from context. No title, no extra text, no emojis — just the link.**
 
-"aaj school mein bully hua" → “Yaar that sucks 💔 tu theek hai na? Koi baat nahi, main hoon na.”
+---
 
-"koi NDA ka course batao" → “Bro, I gotchu 💪 Check this NDA prep course 👇”
+### Golden Rule:
 
-"bas bore ho raha hoon" → “Same yaar 😂 kabhi kabhi bas kuch karne ka mann nahi karta. Chill le thoda!”
+**Never hallucinate. Never skip. Never expose backend. Always reply.**
 
-Now based on the following chat history and question, reply like a close emotionally fluent buddy:
+---
 
-Context:
+ 
+Chat History:  
+{chat_history}
+
+Context (Available Courses):  
 {context}
 
-User's Question:
+User's Question:  
 {question}
 
-CampusBuddy's Response:
-"""
+Welida’s Response (rotate if repeated):**
 
+"""
+load_dotenv()
+api_key = os.getenv("GROQ_KEY")
 prompt = PromptTemplate(input_variables=["context", "question"], template=prompt_template)
 
 # --- Step 1: Load + Embed PDF ---
 def ingest_pdf(pdf_path: str):
     docs = load_and_split_pdf(pdf_path)
-    vectordb = Chroma.from_documents(
+    vectordb = FAISS.from_documents(
         documents=docs,
-        embedding=EMBEDDING_MODEL,
-        persist_directory=CHROMA_DIR
+        embedding=EMBEDDING_MODEL
     )
-    vectordb.persist()
+    vectordb.save_local(FAISS_DIR)
 
 # --- Step 2: RAG chain using OpenRouter GPT-4o + Summary Memory ---
-def get_qa_chain():
-    vectordb = Chroma(persist_directory=CHROMA_DIR, embedding_function=EMBEDDING_MODEL)
-    retriever = vectordb.as_retriever()
 
-    llm = ChatOpenAI(
-        openai_api_key="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",
-        openai_api_base="https://openrouter.ai/api/v1",
-        model="openai/gpt-4o",
-        max_tokens=500,
-        temperature=0.7
+def get_qa_chain():
+    vectordb = FAISS.load_local(FAISS_DIR, EMBEDDING_MODEL, allow_dangerous_deserialization=True)
+    # Try different search strategies
+    retriever = vectordb.as_retriever(
+        search_type="mmr",  # Maximal Marginal Relevance for diversity
+        search_kwargs={
+            "k": 10,  # Get more results
+            "fetch_k": 20,  # Fetch more before filtering
+            "lambda_mult": 0.7
+        }
     )
+    def debug_retriever(query):
+        docs = retriever.get_relevant_documents(query)
+        print(f"Query: {query}")
+        for i, doc in enumerate(docs):
+            print(f"Doc {i}: {doc.page_content[:100]}...")
+        return docs
+    llm = ChatOpenAI(
+    openai_api_key=os.getenv("OPENAI_KEY"),
+    model="gpt-4o",  # or "gpt-4", "gpt-3.5-turbo"
+    max_tokens=512,
+    temperature=0.4,
+)
 
     memory = ConversationSummaryMemory(
         llm=llm,
@@ -93,5 +118,5 @@ def get_qa_chain():
         llm=llm,
         retriever=retriever,
         memory=memory,
-        combine_docs_chain_kwargs={"prompt": prompt}
+        combine_docs_chain_kwargs={"prompt": prompt},
     )

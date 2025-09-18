@@ -5,3 +5,8 @@ openai
 chromadb
 sentence-transformers
 PyPDF2
+langchain-community
+watchdog
+faiss-cpu
+pypdf
+python-multipart
